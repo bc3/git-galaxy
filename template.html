@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Git Galaxy</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; background: #05060f; font-family: system-ui, -apple-system, sans-serif; }
+    #stage { position: fixed; inset: 0; display: block; }
+    .hud { position: fixed; color: #cdd6ff; user-select: none; z-index: 2; }
+    #clock {
+        top: 18px; left: 22px; font-size: 26px; font-weight: 700;
+        letter-spacing: 0.04em; text-shadow: 0 0 18px rgba(120, 140, 255, 0.8);
+    }
+    #clock small { display: block; font-size: 12px; font-weight: 400; opacity: 0.6; letter-spacing: 0.2em; text-transform: uppercase; }
+    #leaderboard {
+        top: 18px; right: 22px; width: 230px; padding: 12px 14px;
+        background: rgba(10, 14, 34, 0.55); border: 1px solid rgba(120, 140, 255, 0.18);
+        border-radius: 12px; backdrop-filter: blur(8px); font-size: 12px;
+    }
+    #leaderboard h2 { font-size: 10px; letter-spacing: 0.25em; text-transform: uppercase; opacity: 0.55; margin-bottom: 2px; }
+    #leaderboard .lb-legend { font-size: 10px; opacity: 0.45; margin-bottom: 8px; }
+    .lb-row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+    .lb-icon { flex: 0 0 14px; font-size: 11px; opacity: 0.85; }
+    .lb-name { flex: 0 0 98px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lb-bar-wrap { flex: 1; height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
+    .lb-bar { display: block; height: 100%; border-radius: 3px; transition: width 0.35s ease; box-shadow: 0 0 8px currentColor; }
+    .lb-count { flex: 0 0 26px; text-align: right; font-variant-numeric: tabular-nums; opacity: 0.8; }
+    #ticker-wrap {
+        left: 0; right: 0; bottom: 64px; height: 26px; overflow: hidden;
+        -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+        mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+    }
+    #ticker { position: absolute; left: 0; top: 0; width: 100%; height: 100%; font-size: 13px; line-height: 26px; opacity: 0.85; will-change: transform; }
+    .ticker-item { position: absolute; top: 0; white-space: nowrap; }
+    #ticker b { font-weight: 600; }
+    #bar {
+        left: 50%; transform: translateX(-50%); bottom: 14px;
+        display: flex; align-items: center; gap: 12px; padding: 9px 16px;
+        background: rgba(10, 14, 34, 0.65); border: 1px solid rgba(120, 140, 255, 0.2);
+        border-radius: 999px; backdrop-filter: blur(10px);
+    }
+    #bar button {
+        background: none; border: none; color: #cdd6ff; cursor: pointer;
+        font-size: 13px; padding: 3px 8px; border-radius: 999px;
+    }
+    #bar button:hover { background: rgba(120, 140, 255, 0.15); }
+    #play { font-size: 17px; width: 34px; }
+    #scrub { width: min(38vw, 420px); accent-color: #7c8cff; }
+    .speed.active { background: rgba(124, 140, 255, 0.3); box-shadow: 0 0 10px rgba(124, 140, 255, 0.4); }
+    #title {
+        top: 18px; left: 50%; transform: translateX(-50%); text-align: center;
+        font-size: 12px; letter-spacing: 0.35em; text-transform: uppercase; opacity: 0.45;
+    }
+    #empty {
+        inset: 0; display: none; align-items: center; justify-content: center;
+        font-size: 22px; opacity: 0.7;
+    }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="title" class="hud">git galaxy</div>
+<div id="clock" class="hud"><small>repo time</small><span id="clock-text">—</span></div>
+<div id="leaderboard" class="hud"><h2>Leaderboard</h2><div class="lb-legend">👤 human · 🤖 bot</div><div id="lb-rows"></div></div>
+<div id="ticker-wrap" class="hud"><div id="ticker"></div></div>
+<div id="bar" class="hud">
+    <button id="play" aria-label="Play/pause">▶</button>
+    <input id="scrub" type="range" min="0" max="90" step="0.01" value="0" aria-label="Timeline">
+    <span id="speeds"></span>
+</div>
+<div id="empty" class="hud">No activity in this range 🌑</div>
+<script>
+window.GALAXY_DATA = /*__DATA__*/null;
+</script>
+<script>
+(() => {
+    "use strict";
+    const DATA = window.GALAXY_DATA;
+    const canvas = document.getElementById("stage");
+    const ctx = canvas.getContext("2d");
+    const DURATION = DATA ? DATA.durationSec : 90;
+
+    if (!DATA || !DATA.events.length) {
+        document.getElementById("empty").style.display = "flex";
+        return;
+    }
+    document.title = `Git Galaxy — ${DATA.repoName}`;
+    document.getElementById("title").textContent = `git galaxy · ${DATA.repoName}`;
+
+    // ---------- helpers ----------
+    const TAU = Math.PI * 2;
+    const GOLDEN = 2.399963229728653;
+    const hashHue = (s) => {
+        let h = 0;
+        for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+        return ((h % 360) + 360) % 360;
+    };
+    const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+    const lerp = (a, b, p) => a + (b - a) * p;
+    const easeOutBack = (p) => 1 + 2.7 * Math.pow(p - 1, 3) + 1.7 * Math.pow(p - 1, 2);
+    const authorById = new Map(DATA.authors.map((a) => [a.id, a]));
+
+    // ---------- sizing ----------
+    let W = 0, H = 0, DPR = 1, CX = 0, CY = 0, MIN = 0;
+    function resize() {
+        DPR = Math.min(window.devicePixelRatio || 1, 2);
+        W = window.innerWidth; H = window.innerHeight;
+        canvas.width = W * DPR; canvas.height = H * DPR;
+        canvas.style.width = W + "px"; canvas.style.height = H + "px";
+        CX = W / 2; CY = H * 0.47; MIN = Math.min(W, H);
+        buildStarfield();
+    }
+
+    // ---------- starfield ----------
+    let stars;
+    function buildStarfield() {
+        stars = document.createElement("canvas");
+        stars.width = W * DPR; stars.height = H * DPR;
+        const s = stars.getContext("2d");
+        s.scale(DPR, DPR);
+        s.fillStyle = "#05060f";
+        s.fillRect(0, 0, W, H);
+        // nebula blobs
+        const blobs = [
+            [0.2, 0.25, 0.5, "rgba(64, 40, 140, 0.16)"],
+            [0.8, 0.7, 0.55, "rgba(24, 80, 140, 0.14)"],
+            [0.6, 0.2, 0.4, "rgba(140, 40, 100, 0.10)"],
+        ];
+        for (const [fx, fy, fr, color] of blobs) {
+            const g = s.createRadialGradient(W * fx, H * fy, 0, W * fx, H * fy, MIN * fr);
+            g.addColorStop(0, color);
+            g.addColorStop(1, "transparent");
+            s.fillStyle = g;
+            s.fillRect(0, 0, W, H);
+        }
+        for (let i = 0; i < 420; i++) {
+            const x = Math.random() * W, y = Math.random() * H;
+            const r = Math.random() * 1.3 + 0.2;
+            s.globalAlpha = Math.random() * 0.7 + 0.15;
+            s.fillStyle = Math.random() < 0.12 ? "#aac4ff" : "#ffffff";
+            s.beginPath(); s.arc(x, y, r, 0, TAU); s.fill();
+        }
+        s.globalAlpha = 1;
+    }
+
+    // ---------- sim state ----------
+    const sim = { t: 0, playing: false, speed: 1, idx: 0 };
+    let branchState = new Map();   // name -> branch obj
+    let authorState = new Map();   // id -> comet obj
+    let counts = new Map();        // authorId -> commits so far
+    let particles = [];
+    let shocks = [];
+    let coreFlare = 0;
+    let slotCounter = 0;
+
+    function branchPos(b, t) {
+        const age = clamp(t - b.birthSim, 0, DURATION);
+        const angle = b.baseAngle + t * 0.03 + age * 0.004;
+        let r = b.targetR;
+        const grow = clamp((t - b.birthSim) / 0.9, 0, 1);
+        r *= easeOutBack(grow);
+        if (b.mergedSim != null && t > b.mergedSim) {
+            const p = clamp((t - b.mergedSim) / 0.8, 0, 1);
+            r *= 1 - p * p;
+        }
+        return { x: CX + Math.cos(angle) * r, y: CY + Math.sin(angle) * r * 0.72, grow };
+    }
+
+    function ensureBranch(name, simT) {
+        let b = branchState.get(name);
+        if (!b) {
+            b = {
+                name,
+                hue: hashHue(name),
+                slot: slotCounter++,
+                birthSim: simT,
+                mergedSim: null,
+                commits: 0,
+                lastActivity: simT,
+            };
+            b.baseAngle = b.slot * GOLDEN;
+            b.targetR = MIN * (0.16 + 0.035 * Math.sqrt(b.slot % 24) * 1.6);
+            b.targetR = Math.min(b.targetR, MIN * 0.46);
+            branchState.set(name, b);
+        }
+        return b;
+    }
+
+    function ensureAuthor(id, simT) {
+        let a = authorState.get(id);
+        if (!a) {
+            const meta = authorById.get(id) || { name: "unknown", bot: false };
+            a = {
+                id,
+                name: meta.name,
+                bot: meta.bot,
+                hue: meta.bot ? 190 : hashHue(meta.name + id),
+                x: CX + (Math.random() - 0.5) * MIN * 0.7,
+                y: CY + (Math.random() - 0.5) * MIN * 0.5,
+                tx: CX, ty: CY,
+                lastActive: simT,
+            };
+            authorState.set(id, a);
+        }
+        return a;
+    }
+
+    // ---------- events ----------
+    function applyEvent(e, hot) {
+        if (e.type === "branch-birth") {
+            ensureBranch(e.branch, e.simT);
+            if (hot && e.branch !== "main") pushTicker(`🌱 branch <b>${esc(e.branch)}</b> created`);
+            return;
+        }
+        if (e.type === "commit") {
+            const b = e.branch === "main" ? null : ensureBranch(e.branch, e.simT);
+            if (b) { b.commits++; b.lastActivity = e.simT; }
+            if (e.authorId) {
+                counts.set(e.authorId, (counts.get(e.authorId) || 0) + 1);
+                const a = ensureAuthor(e.authorId, e.simT);
+                a.lastActive = e.simT;
+                const target = b ? branchPos(b, sim.t) : { x: CX, y: CY };
+                a.tx = target.x + (Math.random() - 0.5) * 46;
+                a.ty = target.y + (Math.random() - 0.5) * 46;
+                if (hot) spawnCommitParticles(a, target, e.files || 1, b ? b.hue : 226);
+            }
+            if (b == null) coreFlare = Math.min(coreFlare + 0.25, 1.4);
+            return;
+        }
+        if (e.type === "merge") {
+            const b = branchState.get(e.branch);
+            if (b && b.mergedSim == null) b.mergedSim = e.simT;
+            coreFlare = Math.min(coreFlare + 0.7, 2);
+            if (hot) {
+                shocks.push({ x: CX, y: CY, r: MIN * 0.05, maxR: MIN * 0.42, life: 1 });
+                burst(CX, CY, 120, b ? b.hue : 226);
+                if (b) {
+                    const p = branchPos(b, sim.t);
+                    burst(p.x, p.y, 40, b.hue);
+                }
+                const who = e.authorId && authorById.get(e.authorId);
+                pushTicker(`💥 <b>${esc(who ? who.name : "someone")}</b> merged <b>${esc(e.branch)}</b> → ${esc(e.into)}`);
+            }
+        }
+    }
+
+    function seek(t) {
+        sim.t = clamp(t, 0, DURATION);
+        branchState = new Map();
+        authorState = new Map();
+        counts = new Map();
+        particles = [];
+        shocks = [];
+        coreFlare = 0;
+        slotCounter = 0;
+        sim.idx = 0;
+        for (const row of lbRowEls.values()) row.el.remove();
+        lbRowEls.clear();
+        while (sim.idx < DATA.events.length && DATA.events[sim.idx].simT <= sim.t) {
+            applyEvent(DATA.events[sim.idx], false);
+            sim.idx++;
+        }
+        rebuildTickerCold();
+        updateHUD(true);
+    }
+
+    // ---------- particles ----------
+    function spawnCommitParticles(from, to, files, hue) {
+        const n = clamp(4 + files, 4, 40);
+        for (let i = 0; i < n; i++) {
+            const jitter = (Math.random() - 0.5) * 0.6;
+            const dx = to.x - from.x, dy = to.y - from.y;
+            const d = Math.hypot(dx, dy) || 1;
+            const speed = 90 + Math.random() * 220;
+            particles.push({
+                x: from.x + (Math.random() - 0.5) * 8,
+                y: from.y + (Math.random() - 0.5) * 8,
+                vx: (dx / d) * speed + jitter * 80,
+                vy: (dy / d) * speed + jitter * 80,
+                life: 0.7 + Math.random() * 0.9,
+                maxLife: 1.6,
+                hue,
+                size: 1 + Math.random() * 2.2,
+            });
+        }
+    }
+    function burst(x, y, n, hue) {
+        for (let i = 0; i < n; i++) {
+            const a = Math.random() * TAU;
+            const sp = 40 + Math.random() * 340;
+            particles.push({
+                x, y,
+                vx: Math.cos(a) * sp, vy: Math.sin(a) * sp * 0.8,
+                life: 0.6 + Math.random() * 1.1,
+                maxLife: 1.7,
+                hue: hue + (Math.random() - 0.5) * 40,
+                size: 1 + Math.random() * 2.6,
+            });
+        }
+    }
+
+    // ---------- ticker ----------
+    const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+    // Conveyor ticker: each item is its own absolutely-positioned span on a
+    // strip that scrolls left at constant speed. New items enter at the right
+    // screen edge (or right behind the previous item), fall off on the left.
+    const tickerEl = document.getElementById("ticker");
+    const TICKER_SPEED = 100; // px/s
+    const TICKER_GAP = 56;
+    let tickerX = 0; // strip translate, decreases forever
+    let tickerNextOffset = 0; // strip-coordinate where the next item may start
+    function pushTicker(html) {
+        const entryX = W - tickerX; // strip-coordinate of the right screen edge
+        if (tickerNextOffset - entryX > W * 1.5) return; // >1.5 screens behind → drop
+        const span = document.createElement("span");
+        span.className = "ticker-item";
+        span.innerHTML = html;
+        const offset = Math.max(entryX, tickerNextOffset);
+        span.style.left = offset + "px";
+        tickerEl.appendChild(span);
+        tickerNextOffset = offset + span.offsetWidth + TICKER_GAP;
+    }
+    function rebuildTickerCold() {
+        tickerEl.innerHTML = "";
+        tickerX = 0;
+        tickerNextOffset = 0;
+        const past = DATA.events.slice(Math.max(0, sim.idx - 8), sim.idx);
+        for (const e of past) {
+            if (e.type === "merge") pushTicker(`💥 merged <b>${esc(e.branch)}</b> → ${esc(e.into)}`);
+            else if (e.type === "branch-birth" && e.branch !== "main") pushTicker(`🌱 <b>${esc(e.branch)}</b>`);
+        }
+    }
+
+    // ---------- HUD ----------
+    const clockText = document.getElementById("clock-text");
+    const lbRows = document.getElementById("lb-rows");
+    const lbRowEls = new Map();
+    const scrub = document.getElementById("scrub");
+    scrub.max = String(DURATION);
+    let lastHud = -1;
+    const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+    function realTimeAt(simT) {
+        const A = DATA.anchors;
+        if (!A.length) return null;
+        if (simT <= A[0].simT) return A[0].realT;
+        for (let i = 1; i < A.length; i++) {
+            if (simT <= A[i].simT) {
+                const p = (simT - A[i - 1].simT) / (A[i].simT - A[i - 1].simT || 1);
+                return lerp(A[i - 1].realT, A[i].realT, p);
+            }
+        }
+        return A[A.length - 1].realT;
+    }
+
+    function updateHUD(force) {
+        if (!force && performance.now() - lastHud < 200) return;
+        lastHud = performance.now();
+        const rt = realTimeAt(sim.t);
+        if (rt != null) {
+            const d = new Date(rt * 1000);
+            const pad = (n) => String(n).padStart(2, "0");
+            clockText.textContent =
+                `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]} · ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        }
+        // leaderboard — persistent rows so the width transition can animate
+        const top = [...counts.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 8);
+        const max = top.length ? top[0][1] : 1;
+        const seen = new Set();
+        for (const [id, n] of top) {
+            seen.add(id);
+            let row = lbRowEls.get(id);
+            if (!row) {
+                const meta = authorById.get(id) || { name: "?", bot: false };
+                const a = authorState.get(id);
+                const hue = a ? a.hue : 226;
+                const el = document.createElement("div");
+                el.className = "lb-row";
+                el.innerHTML = `<span class="lb-icon">${meta.bot ? "🤖" : "👤"}</span>
+                    <span class="lb-name" style="color:hsl(${hue}, 90%, 78%)">${esc(meta.name)}</span>
+                    <span class="lb-bar-wrap"><span class="lb-bar" style="width:0%;background:hsl(${hue}, 90%, 62%);color:hsl(${hue}, 90%, 62%)"></span></span>
+                    <span class="lb-count">0</span>`;
+                row = { el, bar: el.querySelector(".lb-bar"), num: el.querySelector(".lb-count") };
+                lbRowEls.set(id, row);
+            }
+            row.bar.style.width = `${(n / max) * 100}%`;
+            row.num.textContent = String(n);
+            lbRows.appendChild(row.el); // appendChild reorders in ranking order
+        }
+        for (const [id, row] of lbRowEls) {
+            if (!seen.has(id)) { row.el.remove(); lbRowEls.delete(id); }
+        }
+        if (!scrubbing) scrub.value = String(sim.t);
+    }
+
+    // ---------- controls ----------
+    const playBtn = document.getElementById("play");
+    let scrubbing = false;
+    function setPlaying(p) {
+        sim.playing = p;
+        playBtn.textContent = p ? "⏸" : "▶";
+    }
+    playBtn.addEventListener("click", () => {
+        if (!sim.playing && sim.t >= DURATION - 0.01) seek(0);
+        setPlaying(!sim.playing);
+    });
+    scrub.addEventListener("input", () => {
+        scrubbing = true;
+        seek(Number(scrub.value));
+    });
+    scrub.addEventListener("change", () => { scrubbing = false; });
+    const speedsEl = document.getElementById("speeds");
+    for (const s of [0.5, 1, 2, 4, 8]) {
+        const b = document.createElement("button");
+        b.className = "speed" + (s === 1 ? " active" : "");
+        b.textContent = s + "×";
+        b.addEventListener("click", () => {
+            sim.speed = s;
+            speedsEl.querySelectorAll(".speed").forEach((x) => x.classList.remove("active"));
+            b.classList.add("active");
+        });
+        speedsEl.appendChild(b);
+    }
+    window.addEventListener("keydown", (e) => {
+        if (e.key === " ") { e.preventDefault(); playBtn.click(); }
+    });
+
+    // ---------- render ----------
+    function drawCore(t) {
+        const pulse = 1 + 0.06 * Math.sin(t * 3.1) + coreFlare * 0.35;
+        const R = MIN * 0.055 * pulse;
+        const g = ctx.createRadialGradient(CX, CY, 0, CX, CY, R * 3.2);
+        g.addColorStop(0, "rgba(190, 205, 255, 0.95)");
+        g.addColorStop(0.25, "rgba(124, 140, 255, 0.55)");
+        g.addColorStop(1, "transparent");
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(CX, CY, R * 3.2, 0, TAU); ctx.fill();
+        ctx.fillStyle = "#eef2ff";
+        ctx.beginPath(); ctx.arc(CX, CY, R * 0.55, 0, TAU); ctx.fill();
+        ctx.font = "600 11px system-ui";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "rgba(205, 214, 255, 0.75)";
+        ctx.fillText(DATA.mainBranch || "main", CX, CY + R * 3.2 + 14);
+    }
+
+    function drawBranch(b, t) {
+        if (b.mergedSim != null && t > b.mergedSim + 0.85) return;
+        const p = branchPos(b, t);
+        if (p.grow <= 0) return;
+        const activity = clamp(1 - (t - b.lastActivity) / 6, 0, 1);
+        const alpha = b.mergedSim != null && t > b.mergedSim
+            ? 1 - (t - b.mergedSim) / 0.85
+            : 0.55 + activity * 0.45;
+        // arm: curve from core to node
+        ctx.strokeStyle = `hsla(${b.hue}, 85%, 62%, ${alpha * 0.35})`;
+        ctx.lineWidth = 1.5 + activity * 1.5;
+        ctx.beginPath();
+        const mx = lerp(CX, p.x, 0.5) + (p.y - CY) * 0.18;
+        const my = lerp(CY, p.y, 0.5) - (p.x - CX) * 0.18;
+        ctx.moveTo(CX, CY);
+        ctx.quadraticCurveTo(mx, my, p.x, p.y);
+        ctx.stroke();
+        // node
+        const r = 4 + Math.min(Math.sqrt(b.commits) * 1.6, 9) + activity * 2;
+        const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3);
+        g.addColorStop(0, `hsla(${b.hue}, 90%, 70%, ${alpha})`);
+        g.addColorStop(1, "transparent");
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r * 3, 0, TAU); ctx.fill();
+        ctx.fillStyle = `hsla(${b.hue}, 95%, 82%, ${alpha})`;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r * 0.55, 0, TAU); ctx.fill();
+        // label
+        const labelAlpha = alpha * clamp((t - b.birthSim) / 0.8, 0, 1);
+        ctx.font = "11px system-ui";
+        ctx.textAlign = "center";
+        ctx.fillStyle = `hsla(${b.hue}, 70%, 85%, ${labelAlpha * 0.9})`;
+        ctx.fillText(shorten(b.name, 26), p.x, p.y - r * 1.4 - 6);
+    }
+
+    function drawAuthor(a, t, dt) {
+        const idle = t - a.lastActive;
+        if (idle > 18) return;
+        const alpha = clamp(1 - (idle - 10) / 8, 0, 1);
+        a.x += (a.tx - a.x) * clamp(dt * 2.6, 0, 1);
+        a.y += (a.ty - a.y) * clamp(dt * 2.6, 0, 1);
+        const r = a.bot ? 5.5 : 6.5;
+        const g = ctx.createRadialGradient(a.x, a.y, 0, a.x, a.y, r * 3.4);
+        g.addColorStop(0, `hsla(${a.hue}, 95%, 72%, ${0.85 * alpha})`);
+        g.addColorStop(1, "transparent");
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(a.x, a.y, r * 3.4, 0, TAU); ctx.fill();
+        ctx.fillStyle = `hsla(${a.hue}, 95%, 85%, ${alpha})`;
+        if (a.bot) {
+            // hexagon
+            ctx.beginPath();
+            for (let i = 0; i < 6; i++) {
+                const an = (i / 6) * TAU - Math.PI / 2;
+                const px = a.x + Math.cos(an) * r, py = a.y + Math.sin(an) * r;
+                i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+            }
+            ctx.closePath(); ctx.fill();
+        } else {
+            ctx.beginPath(); ctx.arc(a.x, a.y, r * 0.62, 0, TAU); ctx.fill();
+        }
+        ctx.font = "10px system-ui";
+        ctx.textAlign = "center";
+        ctx.fillStyle = `hsla(${a.hue}, 60%, 88%, ${0.85 * alpha})`;
+        ctx.fillText((a.bot ? "🤖 " : "👤 ") + shorten(a.name, 20), a.x, a.y + r + 13);
+    }
+
+    const shorten = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+
+    let last = performance.now();
+    function frame(now) {
+        const dtReal = Math.min((now - last) / 1000, 0.1);
+        last = now;
+        const dt = dtReal * sim.speed;
+
+        if (sim.playing) {
+            sim.t += dt;
+            if (sim.t >= DURATION) { sim.t = DURATION; setPlaying(false); }
+            while (sim.idx < DATA.events.length && DATA.events[sim.idx].simT <= sim.t) {
+                applyEvent(DATA.events[sim.idx], true);
+                sim.idx++;
+            }
+        }
+
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+        ctx.drawImage(stars, 0, 0, W, H);
+
+        ctx.globalCompositeOperation = "lighter";
+        for (const b of branchState.values()) drawBranch(b, sim.t);
+        drawCore(sim.t);
+
+        // particles
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.life -= dtReal;
+            if (p.life <= 0) { particles.splice(i, 1); continue; }
+            p.x += p.vx * dtReal; p.y += p.vy * dtReal;
+            p.vx *= 0.985; p.vy *= 0.985;
+            const a = clamp(p.life / p.maxLife, 0, 1);
+            ctx.fillStyle = `hsla(${p.hue}, 95%, 70%, ${a})`;
+            ctx.beginPath(); ctx.arc(p.x, p.y, p.size * a + 0.4, 0, TAU); ctx.fill();
+        }
+        // shockwaves
+        for (let i = shocks.length - 1; i >= 0; i--) {
+            const s = shocks[i];
+            s.life -= dtReal * 1.1;
+            if (s.life <= 0) { shocks.splice(i, 1); continue; }
+            s.r += (s.maxR - s.r) * dtReal * 3.2;
+            ctx.strokeStyle = `rgba(160, 178, 255, ${s.life * 0.7})`;
+            ctx.lineWidth = 2.5 * s.life;
+            ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, TAU); ctx.stroke();
+        }
+        for (const a of authorState.values()) drawAuthor(a, sim.t, dt);
+        ctx.globalCompositeOperation = "source-over";
+
+        coreFlare = Math.max(0, coreFlare - dtReal * 1.4);
+
+        // ticker conveyor: constant scroll, drop items that left the screen
+        if (tickerEl.firstChild) {
+            tickerX -= dtReal * TICKER_SPEED;
+            tickerEl.style.transform = `translateX(${tickerX}px)`;
+            while (tickerEl.firstChild) {
+                const c = tickerEl.firstChild;
+                if (parseFloat(c.style.left) + c.offsetWidth + tickerX < 0) c.remove();
+                else break;
+            }
+        }
+
+        updateHUD(false);
+        requestAnimationFrame(frame);
+    }
+
+    window.addEventListener("resize", () => { resize(); seek(sim.t); });
+    resize();
+    seek(0);
+    setPlaying(true);
+    tickerX = W;
+    requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
