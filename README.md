@@ -10,6 +10,21 @@ no server needed.
 
 ## Usage
 
+### npx (no clone needed)
+
+```bash
+# run from inside any git repo
+npx git-galaxy
+
+# any other repo, any range
+npx git-galaxy --repo ~/code/my-project --since="1 month ago"
+
+# open the result
+open dist/git-galaxy.html
+```
+
+### From this repo
+
 ```bash
 # visualize the repo you're currently in (last 2 weeks)
 node generate.mjs

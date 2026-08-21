@@ -1,0 +1,27 @@
+{
+  "name": "git-galaxy",
+  "version": "1.0.1",
+  "description": "Turn any git repository's recent history into an animated galaxy movie.",
+  "type": "module",
+  "bin": {
+    "git-galaxy": "generate.mjs"
+  },
+  "files": [
+    "generate.mjs",
+    "lib",
+    "template.html"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test lib/*.test.mjs"
+  },
+  "keywords": [
+    "git",
+    "visualization",
+    "gource"
+  ],
+  "author": "Ben Croughs"
+}
