@@ -19,6 +19,9 @@ npx git-galaxy
 # any other repo, any range
 npx git-galaxy --repo ~/code/my-project --since="1 month ago"
 
+# the entire history, from the very first commit
+npx git-galaxy --forever
+
 # open the result
 open dist/git-galaxy.html
 ```
@@ -32,6 +35,9 @@ node generate.mjs
 # any other repo, any range
 node generate.mjs --repo ~/code/my-project --since="1 month ago"
 
+# the entire history, from the very first commit
+node generate.mjs --forever
+
 # open the result
 open dist/git-galaxy.html
 ```
@@ -42,6 +48,7 @@ open dist/git-galaxy.html
 | ------------ | ----------------------- | ---------------------------------------------- |
 | `--repo`     | current directory       | Path to the git repository to visualize        |
 | `--since`    | `"2 weeks ago"`         | Any `git log --since` expression               |
+| `--forever`  | _(off)_                 | Visualize the whole history — no start date; cannot be combined with `--since` |
 | `--out`      | `dist/git-galaxy.html`  | Output file path                               |
 | `--duration` | `90`                    | Movie length in seconds at 1× speed            |
 | `--bots`     | _(none)_                | Comma-separated extra bot-name keywords (case-insensitive), e.g. `--bots "renovate,ci scout"` |
