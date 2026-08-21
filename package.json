@@ -4,7 +4,7 @@
   "description": "Turn any git repository's recent history into an animated galaxy movie.",
   "type": "module",
   "bin": {
-    "git-galaxy": "./generate.mjs"
+    "git-galaxy": "generate.mjs"
   },
   "files": [
     "generate.mjs",
