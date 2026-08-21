@@ -24,7 +24,7 @@ function parseArgs(argv) {
     const opts = {
         since: "2 weeks ago",
         repo: process.cwd(),
-        out: join(here, "dist", "git-galaxy.html"),
+        out: join(process.cwd(), "dist", "git-galaxy.html"),
         duration: 90,
         bots: [],
     };
