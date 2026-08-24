@@ -1,8 +1,12 @@
 {
   "name": "git-galaxy",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Turn any git repository's recent history into an animated galaxy movie.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bc3/git-galaxy.git"
+  },
   "bin": {
     "git-galaxy": "generate.mjs"
   },

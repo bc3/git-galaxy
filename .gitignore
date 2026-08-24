@@ -141,3 +141,6 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Raw source recordings (see assets/ for the compressed demo used in README)
+*.mov

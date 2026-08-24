@@ -8,6 +8,8 @@ particles, and merges explode into the core with shockwaves.
 Zero dependencies. One command in, one self-contained HTML file out — double-click it,
 no server needed.
 
+![Git Galaxy demo](assets/git-galaxy-demo.gif)
+
 ## Usage
 
 ### npx (no clone needed)
