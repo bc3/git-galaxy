@@ -4,11 +4,14 @@
  *
  * Usage:
  *   node tools/git-galaxy/generate.mjs [--since="2 weeks ago" | --forever]
- *                                      [--repo <path>] [--out <file>]
+ *                                      [--repo <path-or-git-url>] [--out <file>]
  *                                      [--duration <sec>] [--bots "renovate,ci scout"]
+ *
+ * --repo accepts a remote URL (https://, ssh://, git://, git@host:...) — it's
+ * cloned to a temp directory that's removed once the visualization is written.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,6 +21,7 @@ import { buildAuthors } from "./lib/authors.mjs";
 import { inferBranches } from "./lib/branches.mjs";
 import { buildTimeline } from "./lib/timewarp.mjs";
 import { injectData } from "./lib/inject.mjs";
+import { cloneRepo, isGitUrl, repoNameFromUrl } from "./lib/remote.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -35,7 +39,25 @@ try {
     console.error(`git-galaxy: ${err.message}`);
     process.exit(1);
 }
-const repo = resolve(opts.repo);
+
+const remote = isGitUrl(opts.repo);
+let repo;
+let cloneDir;
+if (remote) {
+    try {
+        cloneDir = cloneRepo(opts.repo, { log: console.log });
+    } catch (err) {
+        console.error(`git-galaxy: failed to clone ${opts.repo}: ${err.message}`);
+        process.exit(1);
+    }
+    repo = cloneDir;
+} else {
+    repo = resolve(opts.repo);
+}
+
+process.on("exit", () => {
+    if (cloneDir) rmSync(cloneDir, { recursive: true, force: true });
+});
 
 let repoRoot;
 try {
@@ -107,7 +129,7 @@ for (const e of events) {
 
 const payload = {
     generatedAt: new Date().toISOString(),
-    repoName: basename(repoRoot),
+    repoName: remote ? repoNameFromUrl(opts.repo) : basename(repoRoot),
     mainBranch: mainName,
     range: { since: opts.forever ? null : opts.since, from: realSpan.from, to: realSpan.to },
     durationSec: opts.duration,
