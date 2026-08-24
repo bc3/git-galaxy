@@ -19,6 +19,9 @@ npx git-galaxy
 # any other repo, any range
 npx git-galaxy --repo ~/code/my-project --since="1 month ago"
 
+# any repo on GitHub/GitLab/etc — cloned to a temp dir, cleaned up after
+npx git-galaxy --repo https://github.com/ngrx/platform
+
 # the entire history, from the very first commit
 npx git-galaxy --forever
 
@@ -35,6 +38,9 @@ node generate.mjs
 # any other repo, any range
 node generate.mjs --repo ~/code/my-project --since="1 month ago"
 
+# any repo on GitHub/GitLab/etc — cloned to a temp dir, cleaned up after
+node generate.mjs --repo https://github.com/ngrx/platform
+
 # the entire history, from the very first commit
 node generate.mjs --forever
 
@@ -46,7 +52,7 @@ open dist/git-galaxy.html
 
 | Flag         | Default                 | Description                                    |
 | ------------ | ----------------------- | ---------------------------------------------- |
-| `--repo`     | current directory       | Path to the git repository to visualize        |
+| `--repo`     | current directory       | Path to a local git repository, or a remote URL (`https://`, `ssh://`, `git://`, `git@host:...`) to clone and visualize |
 | `--since`    | `"2 weeks ago"`         | Any `git log --since` expression               |
 | `--forever`  | _(off)_                 | Visualize the whole history — no start date; cannot be combined with `--since` |
 | `--out`      | `dist/git-galaxy.html`  | Output file path                               |
@@ -91,6 +97,8 @@ The template is a single vanilla-JS Canvas 2D app; the page makes no network req
 - Author identities merge on identical email **or** identical (case-insensitive) name.
 - Bot detection defaults to a generic name pattern (`bot`/`automated agent`/`ci runner`).
   Pass `--bots "name1,name2"` to add your org's actual bot/service-account names.
+- Remote URLs are cloned in full (not shallow), since branch inference needs the
+  real commit graph; large repos will take longer to clone than to render.
 
 ## Development
 
