@@ -3,15 +3,16 @@
  * Git Galaxy — generate a self-contained animated visualization of repo activity.
  *
  * Usage:
- *   node tools/git-galaxy/generate.mjs [--since="2 weeks ago"] [--repo <path>]
- *                                      [--out <file>] [--duration <sec>]
- *                                      [--bots "renovate,ci scout"]
+ *   node tools/git-galaxy/generate.mjs [--since="2 weeks ago" | --forever]
+ *                                      [--repo <path>] [--out <file>]
+ *                                      [--duration <sec>] [--bots "renovate,ci scout"]
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parseArgs } from "./lib/args.mjs";
 import { parseGitLog } from "./lib/parse.mjs";
 import { buildAuthors } from "./lib/authors.mjs";
 import { inferBranches } from "./lib/branches.mjs";
@@ -20,33 +21,6 @@ import { injectData } from "./lib/inject.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-function parseArgs(argv) {
-    const opts = {
-        since: "2 weeks ago",
-        repo: process.cwd(),
-        out: join(process.cwd(), "dist", "git-galaxy.html"),
-        duration: 90,
-        bots: [],
-    };
-    for (let i = 0; i < argv.length; i++) {
-        const arg = argv[i];
-        const eq = arg.indexOf("=");
-        const key = eq === -1 ? arg : arg.slice(0, eq);
-        const val = eq === -1 ? argv[++i] : arg.slice(eq + 1);
-        switch (key) {
-            case "--since": opts.since = val; break;
-            case "--repo": opts.repo = val; break;
-            case "--out": opts.out = val; break;
-            case "--duration": opts.duration = Number(val); break;
-            case "--bots": opts.bots = val.split(",").map((s) => s.trim()).filter(Boolean); break;
-            default:
-                console.error(`git-galaxy: unknown option ${arg}`);
-                process.exit(1);
-        }
-    }
-    return opts;
-}
-
 function git(repo, args) {
     return execFileSync("git", ["-C", repo, ...args], {
         encoding: "utf8",
@@ -54,7 +28,13 @@ function git(repo, args) {
     });
 }
 
-const opts = parseArgs(process.argv.slice(2));
+let opts;
+try {
+    opts = parseArgs(process.argv.slice(2));
+} catch (err) {
+    console.error(`git-galaxy: ${err.message}`);
+    process.exit(1);
+}
 const repo = resolve(opts.repo);
 
 let repoRoot;
@@ -66,12 +46,15 @@ try {
 }
 
 const rawLog = git(repo, [
-    "log", "--all", "--date-order", `--since=${opts.since}`,
+    "log", "--all", "--date-order",
+    ...(opts.forever ? [] : [`--since=${opts.since}`]),
     "--pretty=format:%x01%H|%P|%an|%ae|%at|%s", "--name-status",
 ]);
 const commits = parseGitLog(rawLog);
 if (!commits.length) {
-    console.error(`git-galaxy: no commits found since "${opts.since}"`);
+    console.error(opts.forever
+        ? "git-galaxy: no commits found in this repository"
+        : `git-galaxy: no commits found since "${opts.since}"`);
     process.exit(1);
 }
 
@@ -126,7 +109,7 @@ const payload = {
     generatedAt: new Date().toISOString(),
     repoName: basename(repoRoot),
     mainBranch: mainName,
-    range: { since: opts.since, from: realSpan.from, to: realSpan.to },
+    range: { since: opts.forever ? null : opts.since, from: realSpan.from, to: realSpan.to },
     durationSec: opts.duration,
     authors: authors.map(({ id, name, bot, commits: n }) => ({ id, name, bot, commits: n })),
     branches,
