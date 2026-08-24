@@ -22,6 +22,8 @@ import { inferBranches } from "./lib/branches.mjs";
 import { buildTimeline } from "./lib/timewarp.mjs";
 import { injectData } from "./lib/inject.mjs";
 import { cloneRepo, isGitUrl, repoNameFromUrl } from "./lib/remote.mjs";
+import { bold, cyan, green } from "./lib/colors.mjs";
+import { step } from "./lib/progress.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -45,7 +47,7 @@ let repo;
 let cloneDir;
 if (remote) {
     try {
-        cloneDir = cloneRepo(opts.repo, { log: console.log });
+        cloneDir = cloneRepo(opts.repo);
     } catch (err) {
         console.error(`git-galaxy: failed to clone ${opts.repo}: ${err.message}`);
         process.exit(1);
@@ -67,6 +69,7 @@ try {
     process.exit(1);
 }
 
+const logProgress = step("Reading commit history");
 const rawLog = git(repo, [
     "log", "--all", "--date-order",
     ...(opts.forever ? [] : [`--since=${opts.since}`]),
@@ -74,11 +77,15 @@ const rawLog = git(repo, [
 ]);
 const commits = parseGitLog(rawLog);
 if (!commits.length) {
+    logProgress.fail("No commits found");
     console.error(opts.forever
         ? "git-galaxy: no commits found in this repository"
         : `git-galaxy: no commits found since "${opts.since}"`);
     process.exit(1);
 }
+logProgress.done(`Read ${commits.length} commits`);
+
+const analyzeProgress = step("Analyzing branches & authors");
 
 // default branch: first of origin/main, origin/master, main, master that exists
 let mainTip;
@@ -126,7 +133,9 @@ for (const e of events) {
         delete e.authorKey;
     }
 }
+analyzeProgress.done(`${branches.length} branches, ${authors.length} authors`);
 
+const writeProgress = step("Writing visualization");
 const payload = {
     generatedAt: new Date().toISOString(),
     repoName: remote ? repoNameFromUrl(opts.repo) : basename(repoRoot),
@@ -143,8 +152,9 @@ const template = readFileSync(join(here, "template.html"), "utf8");
 const html = injectData(template, payload);
 mkdirSync(dirname(resolve(opts.out)), { recursive: true });
 writeFileSync(resolve(opts.out), html);
+writeProgress.done(`Wrote ${opts.out}`);
 
 console.log(
-    `git-galaxy: ${commits.length} commits, ${branches.length} branches, ` +
-    `${authors.length} authors → ${opts.out}`
+    `${green("✓")} ${bold(commits.length)} commits, ${bold(branches.length)} branches, ` +
+    `${bold(authors.length)} authors → ${cyan(opts.out)}`
 );
