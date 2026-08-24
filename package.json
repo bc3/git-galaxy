@@ -1,6 +1,6 @@
 {
   "name": "git-galaxy",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Turn any git repository's recent history into an animated galaxy movie.",
   "type": "module",
   "bin": {
