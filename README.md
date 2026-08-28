@@ -71,8 +71,13 @@ open dist/git-galaxy.html
 - **Hexagons ⬡** — bots (dependency-update bots, CI agents, …) are drawn differently from
   humans
 - **HUD** — repo-time clock, live author leaderboard, scrolling event ticker
+- **Sound effects** — Star Wars-flavored blaster/lightsaber/explosion sounds for commits,
+  branch creation, and merges, synthesized live with the Web Audio API (no audio files);
+  bigger merges (more commits on the branch) get bigger, more dramatic sounds. Mute with
+  the 🔊 button — browsers require a click before audio can play, so sound starts once you
+  hit play or mute
 - **Playback bar** — play/pause (spacebar), timeline scrubber (seeking deterministically
-  rebuilds the world state), speed 0.5×–8×
+  rebuilds the world state), speed 0.5×–8×, mute toggle
 
 Quiet periods (gaps > 4 h without activity) are automatically time-compressed so nights
 and weekends don't stall the movie.
