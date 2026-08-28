@@ -75,7 +75,7 @@
     <button id="play" aria-label="Play/pause">▶</button>
     <input id="scrub" type="range" min="0" max="90" step="0.01" value="0" aria-label="Timeline">
     <span id="speeds"></span>
-    <button id="mute" class="hint" aria-label="Toggle sound — click anywhere to enable audio">🔊</button>
+    <button id="mute" class="hint" aria-label="Sound off until you interact — click anywhere to enable audio">🔈</button>
 </div>
 <div id="empty" class="hud">No activity in this range 🌑</div>
 <script>
@@ -219,8 +219,25 @@ window.GALAXY_DATA = /*__DATA__*/null;
     // API — no audio files, no dependencies, works fully offline. Browsers block
     // autoplay until a user gesture, so the context is created lazily on the
     // first play/mute click; events before that point are silently skipped.
-    let audioCtx = null, masterGain = null, muted = false;
+    let audioCtx = null, masterGain = null, reverbSend = null, muted = false, audioReady = false;
     const SFX_VOLUME = 0.55;
+    // a synthetic impulse response (exponentially-decaying noise) gives the dry
+    // oscillator/noise voices below a bit of room instead of sounding pasted-on
+    function buildImpulse(duration, decay) {
+        const n = Math.max(1, Math.floor(audioCtx.sampleRate * duration));
+        const buf = audioCtx.createBuffer(2, n, audioCtx.sampleRate);
+        for (let ch = 0; ch < 2; ch++) {
+            const data = buf.getChannelData(ch);
+            for (let i = 0; i < n; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, decay);
+        }
+        return buf;
+    }
+    function updateMuteIcon() {
+        const btn = document.getElementById("mute");
+        if (!btn) return;
+        btn.textContent = muted ? "🔇" : (audioReady ? "🔊" : "🔈");
+        if (audioReady) btn.classList.remove("hint");
+    }
     function ensureAudio() {
         if (audioCtx) { if (audioCtx.state === "suspended") audioCtx.resume(); return; }
         const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -229,8 +246,13 @@ window.GALAXY_DATA = /*__DATA__*/null;
         masterGain = audioCtx.createGain();
         masterGain.gain.value = muted ? 0 : SFX_VOLUME;
         masterGain.connect(audioCtx.destination);
-        const mute = document.getElementById("mute");
-        if (mute) mute.classList.remove("hint");
+        const reverb = audioCtx.createConvolver();
+        reverb.buffer = buildImpulse(1.6, 3.2);
+        reverbSend = audioCtx.createGain();
+        reverbSend.gain.value = 0.4;
+        reverb.connect(reverbSend).connect(masterGain);
+        audioReady = true;
+        updateMuteIcon();
     }
     function noiseBuffer(seconds, shape) {
         const n = Math.max(1, Math.floor(audioCtx.sampleRate * seconds));
@@ -239,79 +261,135 @@ window.GALAXY_DATA = /*__DATA__*/null;
         for (let i = 0; i < n; i++) data[i] = (Math.random() * 2 - 1) * (shape ? shape(i / n) : 1);
         return buf;
     }
-    // blaster "pew" — descending sawtooth chirp, the classic laser-cannon zap
+    // every voice is its own gain node, dry into masterGain + a splash into the reverb send
+    function voiceBus(wet) {
+        const voice = audioCtx.createGain();
+        voice.connect(masterGain);
+        if (wet) { const send = audioCtx.createGain(); send.gain.value = wet; voice.connect(send).connect(reverbSend); }
+        return voice;
+    }
+    // blaster "pew" — a detuned sawtooth pair through a falling lowpass, the classic
+    // laser-cannon zap (the unison detune + filter sweep is what keeps a single
+    // sawtooth from sounding like a thin, buzzy toy)
     function sfxBlaster(baseFreq, dur, vol, delay) {
         if (!audioCtx) return;
         const t0 = audioCtx.currentTime + (delay || 0);
-        const osc = audioCtx.createOscillator();
-        osc.type = "sawtooth";
-        osc.frequency.setValueAtTime(baseFreq, t0);
-        osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.12, t0 + dur);
-        const g = audioCtx.createGain();
-        g.gain.setValueAtTime(vol, t0);
-        g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
-        osc.connect(g).connect(masterGain);
-        osc.start(t0); osc.stop(t0 + dur + 0.02);
+        const attack = 0.004;
+        const voice = voiceBus(0.18);
+        voice.gain.setValueAtTime(0, t0);
+        voice.gain.linearRampToValueAtTime(vol, t0 + attack);
+        voice.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+        const lp = audioCtx.createBiquadFilter();
+        lp.type = "lowpass";
+        lp.Q.value = 1.1;
+        lp.frequency.setValueAtTime(baseFreq * 1.9, t0);
+        lp.frequency.exponentialRampToValueAtTime(baseFreq * 0.35, t0 + dur);
+        lp.connect(voice);
+        for (const detune of [-7, 7]) {
+            const osc = audioCtx.createOscillator();
+            osc.type = "sawtooth";
+            osc.detune.value = detune;
+            osc.frequency.setValueAtTime(baseFreq, t0);
+            osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.13, t0 + dur);
+            osc.connect(lp);
+            osc.start(t0); osc.stop(t0 + dur + 0.03);
+        }
     }
-    // lightsaber-style ignition swoosh — bandpass-filtered noise sweeping up then fading
+    // lightsaber-style ignition swoosh — bandpass-filtered noise sweeping up, with a
+    // low sine hum tail for body instead of just a thin filtered-noise hiss
     function sfxIgnite() {
         if (!audioCtx) return;
         const t0 = audioCtx.currentTime;
-        const dur = 0.3;
+        const dur = 0.34;
+        const voice = voiceBus(0.3);
         const noise = audioCtx.createBufferSource();
         noise.buffer = noiseBuffer(dur);
         const bp = audioCtx.createBiquadFilter();
         bp.type = "bandpass";
-        bp.Q.value = 6;
-        bp.frequency.setValueAtTime(180, t0);
-        bp.frequency.exponentialRampToValueAtTime(900, t0 + dur * 0.9);
-        const g = audioCtx.createGain();
-        g.gain.setValueAtTime(0.0001, t0);
-        g.gain.exponentialRampToValueAtTime(0.14, t0 + 0.05);
-        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-        noise.connect(bp).connect(g).connect(masterGain);
+        bp.Q.value = 5;
+        bp.frequency.setValueAtTime(160, t0);
+        bp.frequency.exponentialRampToValueAtTime(820, t0 + dur * 0.9);
+        const ng = audioCtx.createGain();
+        ng.gain.setValueAtTime(0.0001, t0);
+        ng.gain.exponentialRampToValueAtTime(0.15, t0 + 0.06);
+        ng.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        noise.connect(bp).connect(ng).connect(voice);
         noise.start(t0); noise.stop(t0 + dur + 0.02);
+
+        const hum = audioCtx.createOscillator();
+        hum.type = "sine";
+        hum.frequency.value = 90;
+        const hg = audioCtx.createGain();
+        hg.gain.setValueAtTime(0.0001, t0);
+        hg.gain.exponentialRampToValueAtTime(0.05, t0 + 0.08);
+        hg.gain.exponentialRampToValueAtTime(0.0001, t0 + dur + 0.12);
+        hum.connect(hg).connect(voice);
+        hum.start(t0); hum.stop(t0 + dur + 0.15);
     }
-    // deep rumble + sub thump — distant-explosion weight for big merges
+    // deep rumble + sub thump — a highpassed "crack" transient for punch, a lowpassed
+    // noise body for weight, and a falling sub-sine thump; distant-explosion feel
     function sfxRumble(scale) {
         if (!audioCtx) return;
         const t0 = audioCtx.currentTime;
-        const dur = 0.7 + 0.5 * scale;
+        const dur = 0.8 + 0.6 * scale;
+        const voice = voiceBus(0.5);
+
+        const crack = audioCtx.createBufferSource();
+        crack.buffer = noiseBuffer(0.06, (p) => 1 - p);
+        const hp = audioCtx.createBiquadFilter();
+        hp.type = "highpass";
+        hp.frequency.value = 700;
+        const cg = audioCtx.createGain();
+        cg.gain.setValueAtTime(0.3, t0);
+        cg.gain.exponentialRampToValueAtTime(0.001, t0 + 0.07);
+        crack.connect(hp).connect(cg).connect(voice);
+        crack.start(t0); crack.stop(t0 + 0.08);
+
         const noise = audioCtx.createBufferSource();
         noise.buffer = noiseBuffer(dur, (p) => Math.pow(1 - p, 1.6));
         const lp = audioCtx.createBiquadFilter();
         lp.type = "lowpass";
-        lp.frequency.setValueAtTime(1400, t0);
-        lp.frequency.exponentialRampToValueAtTime(70, t0 + dur);
+        lp.frequency.setValueAtTime(1000, t0);
+        lp.frequency.exponentialRampToValueAtTime(65, t0 + dur);
         const ng = audioCtx.createGain();
-        ng.gain.setValueAtTime(0.4, t0);
+        ng.gain.setValueAtTime(0.001, t0);
+        ng.gain.linearRampToValueAtTime(0.4, t0 + 0.02);
         ng.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
-        noise.connect(lp).connect(ng).connect(masterGain);
-        noise.start(t0); noise.stop(t0 + dur + 0.02);
+        noise.connect(lp).connect(ng).connect(voice);
+        noise.start(t0); noise.stop(t0 + dur + 0.05);
 
         const osc = audioCtx.createOscillator();
         osc.type = "sine";
-        osc.frequency.setValueAtTime(90, t0);
-        osc.frequency.exponentialRampToValueAtTime(32, t0 + 0.4);
+        osc.frequency.setValueAtTime(85, t0);
+        osc.frequency.exponentialRampToValueAtTime(30, t0 + 0.45);
         const og = audioCtx.createGain();
-        og.gain.setValueAtTime(0.5, t0);
-        og.gain.exponentialRampToValueAtTime(0.001, t0 + 0.5);
-        osc.connect(og).connect(masterGain);
-        osc.start(t0); osc.stop(t0 + 0.55);
+        og.gain.setValueAtTime(0.001, t0);
+        og.gain.linearRampToValueAtTime(0.5, t0 + 0.015);
+        og.gain.exponentialRampToValueAtTime(0.001, t0 + 0.55);
+        osc.connect(og).connect(voice);
+        osc.start(t0); osc.stop(t0 + 0.6);
     }
-    // ominous open-fifth brass stinger — Imperial-fanfare flavor for epic merges
+    // ominous open-fifth brass stinger — lowpassed detuned saws with a slow attack,
+    // Imperial-fanfare flavor for epic merges
     function sfxHornStab() {
         if (!audioCtx) return;
         const t0 = audioCtx.currentTime + 0.12;
+        const voice = voiceBus(0.45);
+        const lp = audioCtx.createBiquadFilter();
+        lp.type = "lowpass";
+        lp.Q.value = 0.7;
+        lp.frequency.value = 1300;
+        lp.connect(voice);
         for (const f of [98, 146.83]) { // G2, D3
             const osc = audioCtx.createOscillator();
             osc.type = "sawtooth";
             osc.frequency.value = f;
+            osc.detune.value = (Math.random() - 0.5) * 8;
             const g = audioCtx.createGain();
             g.gain.setValueAtTime(0.0001, t0);
-            g.gain.exponentialRampToValueAtTime(0.16, t0 + 0.1);
+            g.gain.linearRampToValueAtTime(0.16, t0 + 0.12);
             g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.1);
-            osc.connect(g).connect(masterGain);
+            osc.connect(g).connect(lp);
             osc.start(t0); osc.stop(t0 + 1.15);
         }
     }
@@ -543,7 +621,7 @@ window.GALAXY_DATA = /*__DATA__*/null;
     function setMuted(m) {
         muted = m;
         if (masterGain) masterGain.gain.value = muted ? 0 : SFX_VOLUME;
-        muteBtn.textContent = muted ? "🔇" : "🔊";
+        updateMuteIcon();
     }
     muteBtn.addEventListener("click", () => { ensureAudio(); setMuted(!muted); });
     scrub.addEventListener("input", () => {
